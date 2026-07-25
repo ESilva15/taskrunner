@@ -7,9 +7,8 @@ import json
 import time
 import datetime
 import importlib.util
-from os import error, name
-from typing import Callable, Dict, List, Any, Optional
-from dataclasses import dataclass, field
+from typing import Dict, List, Any, Optional
+from dataclasses import dataclass
 from abc import ABC, abstractmethod
 
 from playbook.models import Status, StepLog
@@ -48,7 +47,7 @@ class StepIF(ABC):
 
     def run(self, name: str) -> StepLog:
         """ Run the step. """
-        start_time: float = datetime.datetime.now().timestamp()
+        start_time: int = time.perf_counter_ns()
 
         substeps: List[StepLog] = []
         status: Status = Status.GOOD
@@ -61,8 +60,7 @@ class StepIF(ABC):
             if status == Status.BAD:
                 break
 
-        end_time: float = datetime.datetime.now().timestamp()
-        delta: int = int(end_time - start_time)
+        delta: int = time.perf_counter_ns() - start_time
          
         errors = []
         msg: str = ""
@@ -178,7 +176,7 @@ class Play(object):
         return json.dumps(data)
 
     def play(self) -> StepLog:
-        start_time: float = datetime.datetime.now().timestamp()
+        start_time: int = time.perf_counter_ns()
         playLog: StepLog = StepLog(
                 step_name=self.name,
                 status=Status.GOOD,
@@ -198,8 +196,7 @@ class Play(object):
                 playLog.status = Status.BAD
                 break
 
-        end_time: float = datetime.datetime.now().timestamp()
-        delta: int = int(end_time - start_time)
+        delta: int = time.perf_counter_ns() - start_time
         playLog.duration_sec = delta
 
         if playLog.status == Status.GOOD:
