@@ -34,19 +34,16 @@ def post(ctx):
     
 
 def main():
-    newPlay: Play = Play("backup dirs")
-
-    newPlay.add_step(
-        "backup dirs", 
-        CustomStep(
-            "custom step",
-            pre, play, post,
-        )
-    )
+    newPlay: Play
+    try:
+        newPlay = Play.from_yaml("./playbook.yaml")
+    except Exception as e:
+        print(f"Failed to load playbook: {e}")
+        exit(1)
 
     print(newPlay.view_playbook())
 
-    print(json.dumps(asdict(newPlay.play()), indent=2))
+    # print(json.dumps(asdict(newPlay.play()), indent=2))
 
 
 if __name__ == "__main__":

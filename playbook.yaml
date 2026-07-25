@@ -1,0 +1,18 @@
+playbook_name: "test_playbook"
+steps:
+  - name: "backup dir1"
+    actions:
+      pre: "directory_exists"
+      play: "copy_directory"
+      post: "verify_copy"
+    context:
+      source_dir: "./dir1"
+      destiny_dir: "./dir2"
+  - name: "backup dir2"
+    actions:
+      pre: "directory_exists"
+      play: "copy_directory"
+      post: "verify_copy"
+    context:
+      source_dir: "./dir1"
+      destiny_dir: "./dir2"

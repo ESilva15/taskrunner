@@ -1,41 +1,17 @@
 from __future__ import annotations
 
+import yaml
 import json
+import time
 import datetime
 from os import error, name
 from typing import Callable, Dict, List, Any
 from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
-from enum import Enum, StrEnum
 
-
-class Status(StrEnum):
-    GOOD = "GOOD"
-    BAD = "BAD"
-
-
-@dataclass
-class StepLog(object):
-    step_name: str
-    status: Status
-    duration_sec: int
-    msg: str
-    error: List[str] = field(default_factory=list)
-    substeps: List[StepLog] = field(default_factory=list)
-
-    @property
-    def failed(self) -> bool:
-        """ Checks if the step failed """
-        return len(self.error) > 0 or self.status == Status.BAD
-
-
-# # NOTE: maybe shoulnd't have used an enum
-# class StepLogEncoder(json.JSONEncoder):
-#     """ JSON Encoder for Status Enums. """
-#     def default(self, o):
-#         if isinstance(o, Status):
-#             return o.name
-#         return super().default(o)
+from playbook.models import Status, StepLog
+from playbook.action_registry import ActionFn, ActionRegistry
+from playbook.premade_steps_registry import registry
 
 
 class StepIF(ABC):
@@ -54,6 +30,19 @@ class StepIF(ABC):
     def post(self) -> StepLog:
         """ Run at the end to validate the actions made. """
 
+    @abstractmethod
+    def get_action_names(self) -> Dict[str, str]:
+        """ Return a mapping of action roles (pre, play, post) to function names. """
+        pass
+
+    def __timed_run(self, op) -> StepLog:
+        """Function that sets the duration_sec field on the log."""
+        start_time: int = time.perf_counter_ns()
+        log: StepLog = op()
+        log.duration_sec = time.perf_counter_ns() - start_time
+
+        return log
+
     def run(self, name: str) -> StepLog:
         """ Run the step. """
         start_time: float = datetime.datetime.now().timestamp()
@@ -61,7 +50,7 @@ class StepIF(ABC):
         substeps: List[StepLog] = []
         status: Status = Status.GOOD
         for op in [self.pre, self.play, self.post]:
-            log: StepLog = op()
+            log: StepLog = self.__timed_run(op)
             status = Status.BAD if log.failed else Status.GOOD
 
             substeps.append(log)
@@ -86,14 +75,15 @@ class StepIF(ABC):
 
 
 class CustomStep(StepIF):
-    """ Pre made play to backup directories. """
+    """ Setup custom steps. """
 
     def __init__(
         self, 
         name: str,
-        pre_fn: Callable[[Dict[str, Any]], StepLog],
-        play_fn: Callable[[Dict[str, Any]], StepLog],
-        post_fn: Callable[[Dict[str, Any]], StepLog],
+        pre_fn: ActionFn,
+        play_fn: ActionFn,
+        post_fn: ActionFn,
+        context: Dict[str, Any]
     ):
         self.name: str = name
 
@@ -101,16 +91,28 @@ class CustomStep(StepIF):
         self.play_fn = play_fn
         self.post_fn = post_fn
 
-        self.__context: Dict[str, Any] = {}
+        self.__context = context
 
     def pre(self) -> StepLog:
-        return self.pre_fn(self.__context)
+        return self.pre_fn(self.__context, self.name)
     
     def play(self) -> StepLog:
-        return self.play_fn(self.__context)
+        return self.play_fn(self.__context, self.name)
 
-    def post(self):
-        return self.post_fn(self.__context)
+    def post(self) -> StepLog:
+        return self.post_fn(self.__context, self.name)
+
+    def get_action_names(self) -> Dict[str, str]:
+        return {
+            "pre": self.pre_fn.__name__,
+            "play": self.pre_fn.__name__,
+            "post": self.pre_fn.__name__,
+        }
+
+
+class PlaybookError(Exception):
+    """ Base exception for Playbook parsing and execution failures. """
+    pass
 
 
 @dataclass
@@ -123,19 +125,23 @@ class Play(object):
     def __init__(self, name : str):
         self.name: str = name
         self.__steps: List[StepEntry] = []
+        self.__registries: List[ActionRegistry] = [registry]
 
     def add_step(self, name: str, stepRunner : StepIF):
         self.__steps.append(StepEntry(name=name, step=stepRunner))
 
     def view_playbook(self) -> str:
-        steps: List[str] = []
+        steps_info = []
         for s in self.__steps:
-            steps.append(s.name)
+            steps_info.append({
+                "name": s.name,
+                "actions": s.step.get_action_names()
+            })
 
         data = {
             "name": self.name,
-            "number_of_steps": len(steps),
-            "steps": steps,
+            "number_of_steps": len(steps_info),
+            "steps": steps_info,
         }
 
         return json.dumps(data)
@@ -170,14 +176,63 @@ class Play(object):
 
         return playLog
 
+    def __get_function_from_registry(self, fn_name) -> ActionFn:
+        for reg in self.__registries:
+            try:
+                return reg.get(fn_name, "*")
+            except ValueError:
+                continue
 
-class Service(object):
-    def __init__(self, name: str): 
-        self.name = name
-        self.__playbook: List[StepIF] = []
+        raise ValueError(f"no function with name '{fn_name}' was found")
+
+    def __build_custom_step(self, name, actions, ctx) -> CustomStep:
+        try:
+            pre_fn = self.__get_function_from_registry(actions["pre"])
+            play_fn = self.__get_function_from_registry(actions["play"])
+            post_fn = self.__get_function_from_registry(actions["post"])
+        except KeyError as e:
+            raise PlaybookError(f"Step '{name}' is missing required action field: {e}") from e
+
+        return CustomStep(name=name, pre_fn=pre_fn, play_fn=play_fn, post_fn=post_fn, context=ctx)
 
     @classmethod
-    def run(cls):
-        pass
+    def from_yaml(cls, fp: str) -> Play:
+        """ Loads the playbook from a given YAML file. """
+        try:
+            with open(fp, "r") as f:
+                file_contents = f.read()
+        except FileNotFoundError as e:
+           raise PlaybookError(f"Playbook file not found: {fp}") from e
+        except Exception as e:
+            raise PlaybookError(f"Failed to read file {fp}: {e}") from e 
 
+        return cls.__from_yaml_str(file_contents)
 
+    @classmethod
+    def __from_yaml_str(cls, yaml_str: str) -> Play:
+        data = None
+        try:
+            data = yaml.safe_load(yaml_str)
+        except Exception as e:
+            raise e
+
+        playbook = cls(data["playbook_name"])
+
+        for idx, step_cfg in enumerate(data.get("steps", [])):
+            step_name = step_cfg.get("name", f"step_{idx}")
+            actions = step_cfg.get("actions", {})
+            context = step_cfg.get("actions", {})
+
+            if not isinstance(actions, dict) or len(actions) != 3:
+                raise PlaybookError(
+                    f"Step '{step_name}' (index {idx}) must define an 'actions' map "
+                    "containing 'pre', 'play' and 'post'"
+                )
+            
+            try:
+                customStep: CustomStep = playbook.__build_custom_step(step_name, actions, context)
+                playbook.add_step(step_cfg["name"], customStep)
+            except Exception as e:
+                raise PlaybookError(f"Error configuring step '{step_name}': {e}") from e
+
+        return playbook
