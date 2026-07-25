@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import os
+import sys
 import yaml
 import json
 import time
 import datetime
+import importlib.util
 from os import error, name
-from typing import Callable, Dict, List, Any
+from typing import Callable, Dict, List, Any, Optional
 from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
 
@@ -122,10 +125,33 @@ class StepEntry(object):
 
 
 class Play(object):
-    def __init__(self, name : str):
+    def __init__(self, name : str, registries: Optional[List[ActionRegistry]] = None):
         self.name: str = name
         self.__steps: List[StepEntry] = []
-        self.__registries: List[ActionRegistry] = [registry]
+        self.__registries: List[ActionRegistry] = [registry] + (registries or [])
+
+    @staticmethod
+    def __load_registry_file(file_path: str) -> List[ActionRegistry]:
+        abs_path = os.path.abspath(file_path)
+        module_name = os.path.splitext(os.path.basename(abs_path))[0]
+    
+        spec = importlib.util.spec_from_file_location(module_name, abs_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"could not create spec for registry file: {file_path}")
+    
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+    
+        discovered_registries = [
+            obj for obj in vars(module).values()
+            if isinstance(obj, ActionRegistry)
+        ]
+
+        if not discovered_registries:
+            raise PlaybookError(f"No ActionRegistry instances were found in '{file_path}'")
+    
+        return discovered_registries
 
     def add_step(self, name: str, stepRunner : StepIF):
         self.__steps.append(StepEntry(name=name, step=stepRunner))
@@ -138,8 +164,13 @@ class Play(object):
                 "actions": s.step.get_action_names()
             })
 
+        registry_data = []
+        for reg in self.__registries:
+            registry_data.append(reg.manifest())
+
         data = {
             "name": self.name,
+            "registries": registry_data,
             "number_of_steps": len(steps_info),
             "steps": steps_info,
         }
@@ -196,7 +227,7 @@ class Play(object):
         return CustomStep(name=name, pre_fn=pre_fn, play_fn=play_fn, post_fn=post_fn, context=ctx)
 
     @classmethod
-    def from_yaml(cls, fp: str) -> Play:
+    def from_yaml(cls, fp: str, registries: Optional[List[ActionRegistry]] = None) -> Play:
         """ Loads the playbook from a given YAML file. """
         try:
             with open(fp, "r") as f:
@@ -205,23 +236,39 @@ class Play(object):
            raise PlaybookError(f"Playbook file not found: {fp}") from e
         except Exception as e:
             raise PlaybookError(f"Failed to read file {fp}: {e}") from e 
-
-        return cls.__from_yaml_str(file_contents)
+        
+        yaml_dir = os.path.dirname(os.path.abspath(fp))
+        return cls.__from_yaml_str(file_contents, base_dir=yaml_dir)
 
     @classmethod
-    def __from_yaml_str(cls, yaml_str: str) -> Play:
+    def __from_yaml_str(cls, yaml_str: str, base_dir: str = ".") -> Play:
         data = None
         try:
             data = yaml.safe_load(yaml_str)
         except Exception as e:
-            raise e
+            raise PlaybookError(f"YAML Syntax error: {e}") from e
 
-        playbook = cls(data["playbook_name"])
+        if not isinstance(data, dict) or "playbook_name" not in data:
+            raise PlaybookError("YAML must contain a top-level 'playbook_name' field.")
+
+        # LOAD THE CUSTOM REGISTRIES
+        custom_registries: List[ActionRegistry] = []
+        registry_paths = data.get("registries", [])
+
+        for reg_path in registry_paths:
+            full_path = os.path.join(base_dir, reg_path) if not os.path.isabs(reg_path) else reg_path
+            try:
+                regs = cls.__load_registry_file(full_path)
+                custom_registries.extend(regs)
+            except Exception as e:
+                raise PlaybookError(f"Error loading registry '{reg_path}': {e}") from e
+
+        playbook = cls(data["playbook_name"], registries=custom_registries)
 
         for idx, step_cfg in enumerate(data.get("steps", [])):
             step_name = step_cfg.get("name", f"step_{idx}")
             actions = step_cfg.get("actions", {})
-            context = step_cfg.get("actions", {})
+            context = step_cfg.get("context", {})
 
             if not isinstance(actions, dict) or len(actions) != 3:
                 raise PlaybookError(

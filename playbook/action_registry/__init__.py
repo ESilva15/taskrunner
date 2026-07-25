@@ -44,3 +44,9 @@ class ActionRegistry:
             raise ValueError(f"Version '{ver}' is not registered for function '{name}'")
 
         return versions_dict[ver]
+
+    def manifest(self):
+        functions = {}
+        for fn_name, versions_dict in self.__actions.items():
+            functions[fn_name] = list(versions_dict.keys())
+        return {"registry_name": self.name, "functions": functions}
