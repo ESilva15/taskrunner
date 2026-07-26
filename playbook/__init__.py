@@ -5,7 +5,6 @@ import sys
 import yaml
 import json
 import time
-import datetime
 import importlib.util
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
@@ -17,41 +16,43 @@ from playbook.premade_steps_registry import registry
 
 
 class StepIF(ABC):
-    """ Interface for plays. """
-
     @abstractmethod
-    def pre(self) -> StepLog:
-        """ Run at the start to validate the configurations, inputs, etc. """
+    def run(self) -> StepLog:
+        """Perform the actions."""
         pass
-    
-    @abstractmethod
-    def play(self) -> StepLog:
-        """ Steps to actually run the backup. """
 
     @abstractmethod
-    def post(self) -> StepLog:
-        """ Run at the end to validate the actions made. """
-
-    @abstractmethod
-    def get_action_names(self) -> Dict[str, str]:
+    def get_action_names(self) -> List[str]:
         """ Return a mapping of action roles (pre, play, post) to function names. """
         pass
 
-    def __timed_run(self, op) -> StepLog:
+
+class CustomStep(StepIF):
+    """ Setup custom steps. """
+
+    def __init__( self, name: str, actions: List[ActionFn], context: Dict[str, Any]):
+        self.name: str = name
+        self.__actions = actions
+        self.__context = context
+
+    def get_action_names(self) -> List[str]:
+        return [action.__name__ for action in self.__actions]
+
+    def __timed_run(self, op: ActionFn) -> StepLog:
         """Function that sets the duration_sec field on the log."""
         start_time: int = time.perf_counter_ns()
-        log: StepLog = op()
+        log: StepLog = op(self.__context, self.name)
         log.duration_sec = time.perf_counter_ns() - start_time
 
         return log
 
-    def run(self, name: str) -> StepLog:
+    def run(self) -> StepLog:
         """ Run the step. """
         start_time: int = time.perf_counter_ns()
 
         substeps: List[StepLog] = []
         status: Status = Status.GOOD
-        for op in [self.pre, self.play, self.post]:
+        for op in self.__actions:
             log: StepLog = self.__timed_run(op)
             status = Status.BAD if log.failed else Status.GOOD
 
@@ -70,45 +71,9 @@ class StepIF(ABC):
             msg = "success"
 
         return StepLog(
-                step_name=name, status=status, duration_sec=delta,
+                step_name=self.name, status=status, duration_sec=delta,
                 msg=msg, error=errors, substeps=substeps,
                 )
-
-
-class CustomStep(StepIF):
-    """ Setup custom steps. """
-
-    def __init__(
-        self, 
-        name: str,
-        pre_fn: ActionFn,
-        play_fn: ActionFn,
-        post_fn: ActionFn,
-        context: Dict[str, Any]
-    ):
-        self.name: str = name
-
-        self.pre_fn = pre_fn
-        self.play_fn = play_fn
-        self.post_fn = post_fn
-
-        self.__context = context
-
-    def pre(self) -> StepLog:
-        return self.pre_fn(self.__context, self.name)
-    
-    def play(self) -> StepLog:
-        return self.play_fn(self.__context, self.name)
-
-    def post(self) -> StepLog:
-        return self.post_fn(self.__context, self.name)
-
-    def get_action_names(self) -> Dict[str, str]:
-        return {
-            "pre": self.pre_fn.__name__,
-            "play": self.pre_fn.__name__,
-            "post": self.pre_fn.__name__,
-        }
 
 
 class PlaybookError(Exception):
@@ -187,7 +152,7 @@ class Play(object):
                 )
 
         for s in self.__steps:
-            log: StepLog = s.step.run(s.name)
+            log: StepLog = s.step.run()
 
             playLog.substeps.append(log)
 
@@ -214,17 +179,18 @@ class Play(object):
         raise ValueError(f"no function with name '{fn_name}' was found")
 
     def __build_custom_step(self, name, actions, ctx) -> CustomStep:
-        try:
-            pre_fn = self.__get_function_from_registry(actions["pre"])
-            play_fn = self.__get_function_from_registry(actions["play"])
-            post_fn = self.__get_function_from_registry(actions["post"])
-        except KeyError as e:
-            raise PlaybookError(f"Step '{name}' is missing required action field: {e}") from e
+        functionList: List[ActionFn] = []
+        for f in actions:
+            try:
+                fn = self.__get_function_from_registry(actions[f])
+                functionList.append(fn)
+            except KeyError as e:
+                raise PlaybookError(f"Step '{name}' is missing required action field: {e}") from e
 
-        return CustomStep(name=name, pre_fn=pre_fn, play_fn=play_fn, post_fn=post_fn, context=ctx)
+        return CustomStep(name, functionList, ctx)
 
     @classmethod
-    def from_yaml(cls, fp: str, registries: Optional[List[ActionRegistry]] = None) -> Play:
+    def from_yaml(cls, fp: str) -> Play:
         """ Loads the playbook from a given YAML file. """
         try:
             with open(fp, "r") as f:

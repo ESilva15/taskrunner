@@ -1,7 +1,7 @@
 playbook_name: "test_playbook"
 registries:
   - "./registry/directory_actions.py"
-  - "./registry/borg_actions.py"
+  - "./registry/restic_actions.py"
 
 steps:
   - name: "backup dir1"
