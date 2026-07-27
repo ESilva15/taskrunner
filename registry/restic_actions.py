@@ -14,6 +14,9 @@ from typing import List, Dict, Any, Tuple
 # we can create a class for this I reckon
 
 
+restic = ActionRegistry("restic_actions_reg")
+
+
 def parse_output(line: str) -> List[Dict[str, Any]]:
     errors = []
     for line in line.split('\n'):
@@ -69,8 +72,6 @@ def run_restic_command(cmd: List[str]) -> Tuple[int, List[Dict[str, Any]]]:
     process.stdout.close()
     returncode = process.wait()
     return returncode, parsed_json
-
-restic = ActionRegistry("restic_actions_reg")
 
 
 @restic.register(name="check_restic_environment", version="")
