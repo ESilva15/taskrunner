@@ -4,13 +4,13 @@ import os
 import sys
 import yaml
 import json
-import time
 import importlib.util
+from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 
-from playbook.models import Status, StepLog
+from playbook.models import Status, StepLog, timed_run
 from playbook.action_registry import ActionFn, ActionRegistry
 from playbook.premade_steps_registry import registry
 
@@ -38,22 +38,13 @@ class CustomStep(StepIF):
     def get_action_names(self) -> List[str]:
         return [action.__name__ for action in self.__actions]
 
-    def __timed_run(self, op: ActionFn) -> StepLog:
-        """Function that sets the duration_sec field on the log."""
-        start_time: int = time.perf_counter_ns()
-        log: StepLog = op(self.__context, self.name)
-        log.duration_sec = time.perf_counter_ns() - start_time
-
-        return log
-
+    # NOTE: refactor this method to be more readable
     def run(self) -> StepLog:
         """ Run the step. """
-        start_time: int = time.perf_counter_ns()
-
         substeps: List[StepLog] = []
         status: Status = Status.GOOD
         for op in self.__actions:
-            log: StepLog = self.__timed_run(op)
+            log: StepLog = timed_run(op, self.__context, op.__name__)
             status = Status.BAD if log.failed else Status.GOOD
 
             substeps.append(log)
@@ -61,8 +52,6 @@ class CustomStep(StepIF):
             if status == Status.BAD:
                 break
 
-        delta: int = time.perf_counter_ns() - start_time
-         
         errors = []
         msg: str = ""
         if status == Status.BAD:
@@ -71,7 +60,7 @@ class CustomStep(StepIF):
             msg = "success"
 
         return StepLog(
-                step_name=self.name, status=status, duration_sec=delta,
+                step_name=self.name, status=status,
                 msg=msg, error=errors, substeps=substeps,
                 )
 
@@ -90,6 +79,7 @@ class StepEntry(object):
 class Play(object):
     def __init__(self, name : str, registries: Optional[List[ActionRegistry]] = None):
         self.name: str = name
+        self.log_dir: str = ""
         self.__steps: List[StepEntry] = []
         self.__registries: List[ActionRegistry] = [registry] + (registries or [])
 
@@ -141,7 +131,34 @@ class Play(object):
         return json.dumps(data)
 
     def play(self) -> StepLog:
-        start_time: int = time.perf_counter_ns()
+        log: StepLog = timed_run(self.__play)
+
+        if self.log_dir != "":
+            log.log_file_path = os.path.join(
+                self.log_dir, self.log_file_name(log.start_date_timestamp)
+            )
+            self.__write_log(log)
+
+        return log
+
+    def log_file_name(self, start_date_ns: int) -> str:
+        """ Format to ISO 8601. """
+        seconds = start_date_ns // 1_000_000_000
+        ms = (start_date_ns % 1_000_000_000) // 1_000_000
+
+        dt = datetime.fromtimestamp(seconds, tz=timezone.utc).astimezone()
+
+        return dt.strftime(f"{self.name}_%Y-%m-%d_%H-%M-%S.{ms:03d}.log")
+
+    def __write_log(self, log: StepLog):
+        try:
+            with open(log.log_file_path, "w") as file:
+                json.dump(log, file)
+        except Exception as e:
+            return f"failed to create log file {e}"
+        return ""
+
+    def __play(self) -> StepLog:
         playLog: StepLog = StepLog(
                 step_name=self.name,
                 status=Status.GOOD,
@@ -152,17 +169,14 @@ class Play(object):
                 )
 
         for s in self.__steps:
-            log: StepLog = s.step.run()
+            log: StepLog = timed_run(s.step.run)
 
             playLog.substeps.append(log)
 
             if log.failed:
-                playLog.error.append(f"failed in step: {s.name}")
+                playLog.error.append({"status": "failed", "output": f"failed in step: {s.name}"})
                 playLog.status = Status.BAD
                 break
-
-        delta: int = time.perf_counter_ns() - start_time
-        playLog.duration_sec = delta
 
         if playLog.status == Status.GOOD:
             playLog.msg = "success"
@@ -227,16 +241,17 @@ class Play(object):
                 raise PlaybookError(f"Error loading registry '{reg_path}': {e}") from e
 
         playbook = cls(data["playbook_name"], registries=custom_registries)
+        if data["log_dir"]:
+            playbook.log_dir = data["log_dir"]
 
         for idx, step_cfg in enumerate(data.get("steps", [])):
             step_name = step_cfg.get("name", f"step_{idx}")
             actions = step_cfg.get("actions", {})
             context = step_cfg.get("context", {})
 
-            if not isinstance(actions, dict) or len(actions) != 3:
+            if not isinstance(actions, dict) or len(actions) <= 0:
                 raise PlaybookError(
-                    f"Step '{step_name}' (index {idx}) must define an 'actions' map "
-                    "containing 'pre', 'play' and 'post'"
+                    f"Step '{step_name}' (index {idx}) must define at least one action "
                 )
             
             try:

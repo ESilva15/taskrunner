@@ -19,15 +19,6 @@ def parse_args() -> argparse.Namespace:
         help="Path to the playbook yaml file"
     )
 
-    # NOTE: For now I will only take the registries from the yaml playbook
-    # # Flag for the custom registry files
-    # parser.add_argument(
-    #     "-r", "--registry",
-    #     nargs="+",
-    #     default=[],
-    #     help="One or more python files with actions"
-    # )
-
     return parser.parse_args()
 
 
@@ -42,7 +33,7 @@ def main():
         traceback.print_exc()
         exit(1)
 
-    print(newPlay.view_playbook())
+    # print(newPlay.view_playbook())
     print(json.dumps(asdict(newPlay.play()), indent=2))
 
 

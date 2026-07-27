@@ -2,21 +2,17 @@ playbook_name: "test_playbook"
 registries:
   - "./registry/directory_actions.py"
   - "./registry/restic_actions.py"
+log_dir: "./"
 
 steps:
-  - name: "backup dir1"
+  - name: "backup rusty-packages"
     actions:
-      pre: "directory_exists"
-      play: "copy_directory"
-      post: "verify_copy"
+      create_repo_dir_if_not_exists: "create_dir_if_not_exists"
+      create_repo_if_not_exists: "create_repo_if_not_exists"
+      check_restic_environment: "check_restic_environment"
+      backup_data_to_restic_repo: "backup_data_to_restic_repo"
     context:
-      source_dir: "./dir1"
-      destiny_dir: "./dir2"
-  - name: "backup dir2"
-    actions:
-      pre: "directory_exists"
-      play: "copy_directory"
-      post: "verify_copy"
-    context:
-      source_dir: "./dir1"
-      destiny_dir: "./dir2"
+      passwordFile: "/home/esilva/Trash/test_borgmatic/pass_file"
+      repoPath: "/home/esilva/Trash/test_borgmatic/destiny2"
+      sourcePath: "/home/esilva/Trash/rusty_packages"
+      serviceTag: "rusty-packages"
