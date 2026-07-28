@@ -7,7 +7,7 @@ import json
 import importlib.util
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from abc import ABC, abstractmethod
 
 from playbook.models import Status, StepLog, timed_run
@@ -151,9 +151,10 @@ class Play(object):
         return dt.strftime(f"{self.name}_%Y-%m-%d_%H-%M-%S.{ms:03d}.log")
 
     def __write_log(self, log: StepLog):
+        print(log, file=sys.stderr)
         try:
             with open(log.log_file_path, "w") as file:
-                json.dump(log, file)
+                json.dump(asdict(log), file)
         except Exception as e:
             return f"failed to create log file {e}"
         return ""
