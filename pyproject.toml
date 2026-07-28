@@ -7,6 +7,7 @@ requires-python = ">=3.14"
 dependencies = [
     "docker>=7.2.0",
     "pyaml>=26.7.0",
+    "pytest>=9.1.1",
 ]
 
 [tool.pyright]
