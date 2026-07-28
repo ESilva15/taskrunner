@@ -17,12 +17,18 @@ steps:
     context:
       serviceName: "gitea-db"
       tmpPathPrefix: "/tmp/db_dump.sql"
-  - name: "backup db to restic repo"
+  - name: "test context"
     actions:
-      dump_database: "backup_data_to_restic_repo"
+      dump_database: "dump_pg_database"
     context:
-      sourcePath: "/tmp/db_dump.sql"
-      serviceTag: "gitea-db"
+      serviceName: "gitea-db"
+      tmpPathPrefix: "/tmp/db_dump.sql"
+  # - name: "backup db to restic repo"
+  #   actions:
+  #     dump_database: "backup_data_to_restic_repo"
+  #   context:
+  #     sourcePath: "/tmp/db_dump.sql"
+  #     serviceTag: "gitea-db"
   # - name: "backup rusty-packages"
   #   actions:
   #     create_repo_dir_if_not_exists: "create_dir_if_not_exists"

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import time
 from enum import StrEnum
 from typing import List, Dict, Any, Callable
@@ -33,12 +35,31 @@ class StepLog(object):
         return len(self.error) > 0 or self.status == Status.BAD
 
     @classmethod
-    def ok(cls, name: str, msg: str = "success") -> StepLog:
-        return cls(step_name=name, status=Status.GOOD, msg=msg)
+    def ok(cls, name: str, msg: str = "success", pipe_ctx: Dict[str, Any] = {}) -> StepLog:
+        return cls(step_name=name, status=Status.GOOD, msg=msg, pipe_ctx=pipe_ctx)
 
     @classmethod
     def fail(cls, name: str, errors: List[Any]) -> StepLog:
         return cls(step_name=name, status=Status.BAD, error=errors)
+
+
+class ContextChecker:
+    """Safely extract values with error messages."""
+    def __init__(self, ctx: Dict[str, Any]):
+        self._ctx = ctx
+
+    @classmethod
+    def requires(cls, *args):
+        def decorator(func: ActionFn):
+            def wrapper(ctx: Dict[str, Any], name: str) -> StepLog:
+                if all(key in ctx for key in args):
+                    return func(ctx, name)
+                else:
+                    missing_keys = [key for key in args if key not in ctx]
+                    missing_keys_msg = f"missing context keys: {missing_keys}"
+                    return StepLog.fail(name, [{"status": "failed", "output": missing_keys_msg}])
+            return wrapper
+        return decorator
 
 
 def human_readable_date(time: int) -> str:
@@ -68,3 +89,6 @@ def timed_run(op: Callable[..., StepLog], *args: Any, **kwargs: Any) -> StepLog:
         log.end_date = human_readable_date(end_date)
     
     return log
+
+
+ActionFn = Callable[[Dict[str, Any], str], StepLog]

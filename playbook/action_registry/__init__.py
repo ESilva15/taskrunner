@@ -1,9 +1,6 @@
 from dataclasses import dataclass
-from playbook.models import StepLog
+from playbook.models import StepLog, ActionFn
 from typing import Callable, Dict, Any
-
-
-ActionFn = Callable[[Dict[str, Any], str], StepLog]
 
 
 @dataclass

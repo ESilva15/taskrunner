@@ -7,7 +7,7 @@ import json
 import importlib.util
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Tuple
-from dataclasses import asdict, dataclass
+from dataclasses import MISSING, asdict, dataclass
 from abc import ABC, abstractmethod
 
 from playbook.models import Status, StepLog, timed_run
@@ -30,7 +30,7 @@ class StepIF(ABC):
 class CustomStep(StepIF):
     """ Setup custom steps. """
 
-    def __init__( self, name: str, actions: List[ActionFn], context: Dict[str, Any]):
+    def __init__(self, name: str, actions: List[ActionFn], context: Dict[str, Any]):
         self.name: str = name
         self.__actions = actions
         self.__context = context
@@ -43,9 +43,17 @@ class CustomStep(StepIF):
         """ Run the step. """
         substeps: List[StepLog] = []
         status: Status = Status.GOOD
+
+        # NOTE:
+        # Use this to move context from the previous step to the next step
+        # This is wrong, we are moving away from having a list of steps here to a single
+        # step for each operation
+        prev_step_ctx: Dict[str, Any] = {}
+
         for op in self.__actions:
-            log: StepLog = timed_run(op, ctx | self.__context, op.__name__)
+            log: StepLog = timed_run(op, ctx | prev_step_ctx | self.__context, op.__name__)
             status = Status.BAD if log.failed else Status.GOOD
+            prev_step_ctx = log.pipe_ctx
 
             substeps.append(log)
 
@@ -55,33 +63,21 @@ class CustomStep(StepIF):
         errors = []
         msg: str = ""
         if status == Status.BAD:
-            errors = ["substep failed"]
+            # Note, use this to set the standar error output/formatting
+            # errors = [{"status": "failed", "output": ""}]
+            errors = []
         else:
             msg = "success"
 
         return StepLog(
                 step_name=self.name, status=status,
-                msg=msg, error=errors, substeps=substeps,
+                msg=msg, error=errors, substeps=substeps, pipe_ctx=prev_step_ctx
                 )
 
 
 class PlaybookError(Exception):
     """ Base exception for Playbook parsing and execution failures. """
     pass
-
-
-class ContextWrapper:
-    """Safely extract values with error messages."""
-    def __init__(self, ctx: Dict[str, Any]):
-        self._ctx = ctx
-
-    def get(self, key: str, default: Any = None) -> Any:
-        return self._ctx.get(key, default)
-    
-    def require(self, *keys: str) -> Tuple[List[str], Dict[str, Any]]:
-        missing = [k for k in keys if not self._ctx.get(k)]
-        values = {k: self._ctx.get(k) for k in keys if k not in missing}
-        return missing, values
 
 
 @dataclass
@@ -184,8 +180,10 @@ class Play(object):
                 substeps=[],
                 )
 
+        prev_ctx: Dict[str, Any] = {}
         for s in self._steps:
-            log: StepLog = timed_run(s.step.run, self._context)
+            log: StepLog = timed_run(s.step.run, self._context | prev_ctx)
+            prev_ctx = log.pipe_ctx
 
             playLog.substeps.append(log)
 
@@ -217,7 +215,7 @@ class Play(object):
             except KeyError as e:
                 raise PlaybookError(f"Step '{name}' is missing required action field: {e}") from e
 
-        return CustomStep(name, functionList, self._context | ctx)
+        return CustomStep(name, functionList, ctx)
 
     # NOTE: Move to factory
     @classmethod
