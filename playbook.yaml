@@ -2,16 +2,27 @@ playbook_name: "test_playbook"
 registries:
   - "./registry/directory_actions.py"
   - "./registry/restic_actions.py"
-  - "./registry/db_pg_actions.py"
+  - "./registry/dbpg_actions.py"
+  - "./registry/docker_actions.py"
 log_dir: "./"
+
+global_context:
+  repoPath: "/home/esilva/Trash/test_borgmatic/destiny2"
+  passwordFile: "/home/esilva/Trash/test_borgmatic/pass_file"
 
 steps:
   - name: "dump rusty-packages db"
     actions:
-      get_container_name: "get_service_container"
-      # dump_database: "dump_pg_database"
+      dump_database: "dump_pg_database"
     context:
-      serviceName: "something"
+      serviceName: "gitea-db"
+      tmpPathPrefix: "/tmp/db_dump.sql"
+  - name: "backup db to restic repo"
+    actions:
+      dump_database: "backup_data_to_restic_repo"
+    context:
+      sourcePath: "/tmp/db_dump.sql"
+      serviceTag: "gitea-db"
   # - name: "backup rusty-packages"
   #   actions:
   #     create_repo_dir_if_not_exists: "create_dir_if_not_exists"
@@ -19,7 +30,5 @@ steps:
   #     check_restic_environment: "check_restic_environment"
   #     backup_data_to_restic_repo: "backup_data_to_restic_repo"
   #   context:
-  #     passwordFile: "/home/esilva/Trash/test_borgmatic/pass_file"
-  #     repoPath: "/home/esilva/Trash/test_borgmatic/destiny2"
   #     sourcePath: "/home/esilva/Trash/rusty_packages"
   #     serviceTag: "rusty-packages"

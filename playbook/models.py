@@ -25,6 +25,7 @@ class StepLog(object):
     error: List[Dict[Any, Any]] = field(default_factory=list)
     substeps: List[StepLog] = field(default_factory=list)
     log_file_path: str = ""
+    pipe_ctx: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def failed(self) -> bool:

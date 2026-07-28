@@ -114,7 +114,7 @@ def create_repo_if_not_exists(ctx, name: str = "") -> StepLog:
             return StepLog.fail(name, [{"status": "failed", "output": log.error}])
 
         # Create repo
-        repoCreateLog: StepLog = create_restic_repo(ctx, name + f".{create_restic_repo}")
+        repoCreateLog: StepLog = create_restic_repo(ctx, name + f".{create_restic_repo.__name__}")
         if repoCreateLog.failed:
             return StepLog.fail(name, [{"status": "failed", "output": repoCreateLog.error}])
         msg = "repo created"
@@ -146,13 +146,10 @@ def check_if_repo_exists(ctx, name: str = "") -> StepLog:
 
 @restic.register(name="backup_data_to_restic_repo", version="")
 def backup_data_to_restic_repo(ctx, name) -> StepLog:
-    out = subprocess.run(
-        ["restic", "backup", ctx["sourcePath"], "--json", "--quiet",
-         "-r", ctx["repoPath"], "--password-file", ctx["passwordFile"]],
-        text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-    )
+    cmd = ["restic", "backup", ctx["sourcePath"], "--json", "--quiet",
+         "-r", ctx["repoPath"], "--password-file", ctx["passwordFile"]]
 
-    json_output: List[Dict[str, Any]] = parse_output(out.stdout)
+    returncode, json_output = run_restic_command(cmd)
     errors: List[Dict[str, Any]] = find_restic_errors(json_output)
 
     # Handle error messages in JSON output
@@ -160,24 +157,7 @@ def backup_data_to_restic_repo(ctx, name) -> StepLog:
         return StepLog.fail(name, errors)
 
     # Make sure the return code is good too
-    if out.returncode != 0:
-        return StepLog.fail(name, [{"status": "failed", "output": out.stdout}])
+    if returncode != 0:
+        return StepLog.fail(name, [{"status": "failed", "output": errors}])
 
-    # Return code is 0, so it was successful, output the message
-    try:
-        data = json.loads(out.stdout)
-        msg = data
-    except:
-        msg = {
-            "status": "ran succesfully, but an error occurred parsing the output",
-            "output": out.stdout,
-        }
-
-    return StepLog.ok(name, str(msg))
-
-
-#-- BIG NOTE ------------------------------------------------------------------#
-# I will use the restic registry for database actions until I make it so cross #
-# registry calls with context are possible. But right now the yaml config      #
-# doesnt support that anyway.                                                  #
-#------------------------------------------------------------------------------#
+    return StepLog.ok(name, "backup successful")

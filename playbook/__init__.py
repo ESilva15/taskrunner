@@ -6,7 +6,7 @@ import yaml
 import json
 import importlib.util
 from datetime import datetime, timezone
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import asdict, dataclass
 from abc import ABC, abstractmethod
 
@@ -17,7 +17,7 @@ from playbook.premade_steps_registry import registry
 
 class StepIF(ABC):
     @abstractmethod
-    def run(self) -> StepLog:
+    def run(self, ctx: Dict[str, Any]) -> StepLog:
         """Perform the actions."""
         pass
 
@@ -39,12 +39,12 @@ class CustomStep(StepIF):
         return [action.__name__ for action in self.__actions]
 
     # NOTE: refactor this method to be more readable
-    def run(self) -> StepLog:
+    def run(self, ctx) -> StepLog:
         """ Run the step. """
         substeps: List[StepLog] = []
         status: Status = Status.GOOD
         for op in self.__actions:
-            log: StepLog = timed_run(op, self.__context, op.__name__)
+            log: StepLog = timed_run(op, ctx | self.__context, op.__name__)
             status = Status.BAD if log.failed else Status.GOOD
 
             substeps.append(log)
@@ -70,6 +70,20 @@ class PlaybookError(Exception):
     pass
 
 
+class ContextWrapper:
+    """Safely extract values with error messages."""
+    def __init__(self, ctx: Dict[str, Any]):
+        self._ctx = ctx
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._ctx.get(key, default)
+    
+    def require(self, *keys: str) -> Tuple[List[str], Dict[str, Any]]:
+        missing = [k for k in keys if not self._ctx.get(k)]
+        values = {k: self._ctx.get(k) for k in keys if k not in missing}
+        return missing, values
+
+
 @dataclass
 class StepEntry(object):
     name: str
@@ -77,14 +91,16 @@ class StepEntry(object):
 
 
 class Play(object):
-    def __init__(self, name : str, registries: Optional[List[ActionRegistry]] = None):
+    def __init__(self, name : str, registries: Dict[str, ActionRegistry]):
         self.name: str = name
         self.log_dir: str = ""
-        self.__steps: List[StepEntry] = []
-        self.__registries: List[ActionRegistry] = [registry] + (registries or [])
+        self._context: Dict[str, Any] = {}
+        self._steps: List[StepEntry] = []
+        self._registries: Dict[str, ActionRegistry] = {registry.name: registry} | registries
 
+    # NOTE: this should move to the ActionRegistry thing probably
     @staticmethod
-    def __load_registry_file(file_path: str) -> List[ActionRegistry]:
+    def _load_registry_file(file_path: str) -> List[ActionRegistry]:
         abs_path = os.path.abspath(file_path)
         module_name = os.path.splitext(os.path.basename(abs_path))[0]
     
@@ -107,18 +123,18 @@ class Play(object):
         return discovered_registries
 
     def add_step(self, name: str, stepRunner : StepIF):
-        self.__steps.append(StepEntry(name=name, step=stepRunner))
+        self._steps.append(StepEntry(name=name, step=stepRunner))
 
     def view_playbook(self) -> str:
         steps_info = []
-        for s in self.__steps:
+        for s in self._steps:
             steps_info.append({
                 "name": s.name,
                 "actions": s.step.get_action_names()
             })
 
         registry_data = []
-        for reg in self.__registries:
+        for reg in self._registries.values():
             registry_data.append(reg.manifest())
 
         data = {
@@ -131,13 +147,13 @@ class Play(object):
         return json.dumps(data)
 
     def play(self) -> StepLog:
-        log: StepLog = timed_run(self.__play)
+        log: StepLog = timed_run(self._play)
 
         if self.log_dir != "":
             log.log_file_path = os.path.join(
                 self.log_dir, self.log_file_name(log.start_date_timestamp)
             )
-            self.__write_log(log)
+            self._write_log(log)
 
         return log
 
@@ -150,16 +166,15 @@ class Play(object):
 
         return dt.strftime(f"{self.name}_%Y-%m-%d_%H-%M-%S.{ms:03d}.log")
 
-    def __write_log(self, log: StepLog):
-        print(log, file=sys.stderr)
+    def _write_log(self, log: StepLog):
         try:
             with open(log.log_file_path, "w") as file:
                 json.dump(asdict(log), file)
         except Exception as e:
-            return f"failed to create log file {e}"
+            raise PlaybookError(f"failed to create log file {e}") from e
         return ""
 
-    def __play(self) -> StepLog:
+    def _play(self) -> StepLog:
         playLog: StepLog = StepLog(
                 step_name=self.name,
                 status=Status.GOOD,
@@ -169,8 +184,8 @@ class Play(object):
                 substeps=[],
                 )
 
-        for s in self.__steps:
-            log: StepLog = timed_run(s.step.run)
+        for s in self._steps:
+            log: StepLog = timed_run(s.step.run, self._context)
 
             playLog.substeps.append(log)
 
@@ -184,8 +199,8 @@ class Play(object):
 
         return playLog
 
-    def __get_function_from_registry(self, fn_name) -> ActionFn:
-        for reg in self.__registries:
+    def _get_function_from_registry(self, fn_name) -> ActionFn:
+        for reg in self._registries.values():
             try:
                 return reg.get(fn_name, "*")
             except ValueError:
@@ -193,17 +208,18 @@ class Play(object):
 
         raise ValueError(f"no function with name '{fn_name}' was found")
 
-    def __build_custom_step(self, name, actions, ctx) -> CustomStep:
+    def _build_custom_step(self, name, actions, ctx) -> CustomStep:
         functionList: List[ActionFn] = []
         for f in actions:
             try:
-                fn = self.__get_function_from_registry(actions[f])
+                fn = self._get_function_from_registry(actions[f])
                 functionList.append(fn)
             except KeyError as e:
                 raise PlaybookError(f"Step '{name}' is missing required action field: {e}") from e
 
-        return CustomStep(name, functionList, ctx)
+        return CustomStep(name, functionList, self._context | ctx)
 
+    # NOTE: Move to factory
     @classmethod
     def from_yaml(cls, fp: str) -> Play:
         """ Loads the playbook from a given YAML file. """
@@ -218,33 +234,26 @@ class Play(object):
         yaml_dir = os.path.dirname(os.path.abspath(fp))
         return cls.__from_yaml_str(file_contents, base_dir=yaml_dir)
 
+    # NOTE: Move to factory
     @classmethod
-    def __from_yaml_str(cls, yaml_str: str, base_dir: str = ".") -> Play:
-        data = None
-        try:
-            data = yaml.safe_load(yaml_str)
-        except Exception as e:
-            raise PlaybookError(f"YAML Syntax error: {e}") from e
+    def __from_yaml_str_load_registries(cls, dir, data) -> Dict[str, ActionRegistry]:
+        custom_registries: Dict[str, ActionRegistry] = {}
+        registry_paths = data.get("registries", {})
 
-        if not isinstance(data, dict) or "playbook_name" not in data:
-            raise PlaybookError("YAML must contain a top-level 'playbook_name' field.")
-
-        # LOAD THE CUSTOM REGISTRIES
-        custom_registries: List[ActionRegistry] = []
-        registry_paths = data.get("registries", [])
-
+        custom_registries: Dict[str, ActionRegistry] = {}
         for reg_path in registry_paths:
-            full_path = os.path.join(base_dir, reg_path) if not os.path.isabs(reg_path) else reg_path
+            full_path = os.path.join(dir, reg_path) if not os.path.isabs(reg_path) else reg_path
             try:
-                regs = cls.__load_registry_file(full_path)
-                custom_registries.extend(regs)
+                regs = cls._load_registry_file(full_path)
+                for new_reg in regs:
+                    custom_registries[new_reg.name] = new_reg
             except Exception as e:
                 raise PlaybookError(f"Error loading registry '{reg_path}': {e}") from e
 
-        playbook = cls(data["playbook_name"], registries=custom_registries)
-        if data["log_dir"]:
-            playbook.log_dir = data["log_dir"]
+        return custom_registries
 
+    # NOTE: Move to factory
+    def __from_yaml_str_load_steps(self, data):
         for idx, step_cfg in enumerate(data.get("steps", [])):
             step_name = step_cfg.get("name", f"step_{idx}")
             actions = step_cfg.get("actions", {})
@@ -256,9 +265,35 @@ class Play(object):
                 )
             
             try:
-                customStep: CustomStep = playbook.__build_custom_step(step_name, actions, context)
-                playbook.add_step(step_cfg["name"], customStep)
+                customStep: CustomStep = self._build_custom_step(step_name, actions, context)
+                self.add_step(step_cfg["name"], customStep)
             except Exception as e:
                 raise PlaybookError(f"Error configuring step '{step_name}': {e}") from e
+
+    # NOTE: Move to factory
+    @classmethod
+    def __from_yaml_str(cls, yaml_str: str, base_dir: str = ".") -> Play:
+        data = None
+        try:
+            data = yaml.safe_load(yaml_str)
+        except Exception as e:
+            raise PlaybookError(f"YAML Syntax error: {e}") from e
+
+        if not isinstance(data, dict) or "playbook_name" not in data:
+            raise PlaybookError("YAML must contain a top-level 'playbook_name' field.")
+
+        try:
+            custom_registries = cls.__from_yaml_str_load_registries(base_dir, data)
+        except Exception as e:
+            raise PlaybookError(f"registries load error: {e}") from e
+
+        playbook = cls(data["playbook_name"], registries=custom_registries)
+        try:
+            playbook.__from_yaml_str_load_steps(data)
+        except Exception as e:
+            raise PlaybookError(f"steps load error: {e}") from e
+
+        playbook._context = data.get("global_context", {})
+        playbook.log_dir = data.get("log_dir", "")
 
         return playbook
