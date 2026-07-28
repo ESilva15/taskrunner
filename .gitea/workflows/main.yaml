@@ -1,0 +1,21 @@
+name: main
+run-name: ${{ gitea.actor }} is running main pipeline
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  Explore-Gitea-Actions:
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Install uv"
+        run: wget -qO- https://astral.sh/uv/install.sh | sh
+      - name: Check out repository code
+        uses: actions/checkout@v4
+      - name: Sync dependencies with uv
+        run: uv sync
+      - name: Run tests
+        run: uv run pytest
+        env:
+          PYTHONPATH: .
+      - run: echo "This job's status is ${{ job.status }}."
