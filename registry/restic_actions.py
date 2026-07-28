@@ -174,3 +174,10 @@ def backup_data_to_restic_repo(ctx, name) -> StepLog:
         }
 
     return StepLog.ok(name, str(msg))
+
+
+#-- BIG NOTE ------------------------------------------------------------------#
+# I will use the restic registry for database actions until I make it so cross #
+# registry calls with context are possible. But right now the yaml config      #
+# doesnt support that anyway.                                                  #
+#------------------------------------------------------------------------------#

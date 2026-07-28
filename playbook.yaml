@@ -2,17 +2,24 @@ playbook_name: "test_playbook"
 registries:
   - "./registry/directory_actions.py"
   - "./registry/restic_actions.py"
+  - "./registry/db_pg_actions.py"
 log_dir: "./"
 
 steps:
-  - name: "backup rusty-packages"
+  - name: "dump rusty-packages db"
     actions:
-      create_repo_dir_if_not_exists: "create_dir_if_not_exists"
-      create_repo_if_not_exists: "create_repo_if_not_exists"
-      check_restic_environment: "check_restic_environment"
-      backup_data_to_restic_repo: "backup_data_to_restic_repo"
+      get_container_name: "get_service_container"
+      # dump_database: "dump_pg_database"
     context:
-      passwordFile: "/home/esilva/Trash/test_borgmatic/pass_file"
-      repoPath: "/home/esilva/Trash/test_borgmatic/destiny2"
-      sourcePath: "/home/esilva/Trash/rusty_packages"
-      serviceTag: "rusty-packages"
+      serviceName: "something"
+  # - name: "backup rusty-packages"
+  #   actions:
+  #     create_repo_dir_if_not_exists: "create_dir_if_not_exists"
+  #     create_repo_if_not_exists: "create_repo_if_not_exists"
+  #     check_restic_environment: "check_restic_environment"
+  #     backup_data_to_restic_repo: "backup_data_to_restic_repo"
+  #   context:
+  #     passwordFile: "/home/esilva/Trash/test_borgmatic/pass_file"
+  #     repoPath: "/home/esilva/Trash/test_borgmatic/destiny2"
+  #     sourcePath: "/home/esilva/Trash/rusty_packages"
+  #     serviceTag: "rusty-packages"

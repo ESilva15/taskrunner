@@ -33,7 +33,7 @@ def main():
         traceback.print_exc()
         exit(1)
 
-    # print(newPlay.view_playbook())
+    print(newPlay.view_playbook())
     print(json.dumps(asdict(newPlay.play()), indent=2))
 
 
