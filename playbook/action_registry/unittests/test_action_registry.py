@@ -1,6 +1,6 @@
 import os
 import unittest
-from a import ActionRegistry
+from playbook import ActionRegistry
 
 
 CDIR = os.path.dirname(__file__)
