@@ -16,7 +16,7 @@ dbpgactions = ActionRegistry("dbpg_actions_reg")
  
  
 @dbpgactions.register(name="dump_pg_database", version="")
-@ContextChecker.requires("database")
-def dump_pg_database(ctx, name) -> StepLog:
+@ContextChecker.requires("database", "compose")
+def dump_pg_database_from_container(ctx, name) -> StepLog:
     print(ctx, file=sys.stderr)
     return StepLog.ok(name, "", pipe_ctx={"new_data": "coolData"})

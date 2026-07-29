@@ -1,6 +1,6 @@
 # restic actions registry
 from playbook.action_registry import ActionRegistry
-from playbook.models import StepLog
+from playbook.models import ContextChecker, StepLog
 
 import sys
 import json
@@ -145,11 +145,15 @@ def check_if_repo_exists(ctx, name: str = "") -> StepLog:
 
 
 @restic.register(name="backup_data_to_restic_repo", version="")
+@ContextChecker.requires("source_path", "passwordFile")
 def backup_data_to_restic_repo(ctx, name) -> StepLog:
-    cmd = ["restic", "backup", ctx["sourcePath"], "--json", "--quiet",
+    cmd = ["restic", "backup", ctx["source_path"], "--json", "--quiet",
          "-r", ctx["repoPath"], "--password-file", ctx["passwordFile"]]
+    if ctx["tags"]:
+        cmd.extend(["--tag", ','.join(ctx["tags"])])
 
     returncode, json_output = run_restic_command(cmd)
+    print(json_output, file=sys.stderr)
     errors: List[Dict[str, Any]] = find_restic_errors(json_output)
 
     # Handle error messages in JSON output

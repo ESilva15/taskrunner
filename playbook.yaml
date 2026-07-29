@@ -1,4 +1,4 @@
-playbook_name: "test_playbook"
+playbook_name: "gitea_service_backup"
 registries:
   - "./registry/directory_actions.py"
   - "./registry/restic_actions.py"
@@ -11,30 +11,37 @@ global_context:
   passwordFile: "/home/esilva/Trash/test_borgmatic/pass_file"
 
 steps:
-  - name: "dump rusty-packages db"
+  - name: "find database container"
     actions:
-      dump_database: "dump_pg_database"
+      find_container: "get_service_container_name"
     context:
-      serviceName: "gitea-db"
-      tmpPathPrefix: "/tmp/db_dump.sql"
-  - name: "test context"
+      service_name: "gitea-db"
+
+  - name: "dump database"
     actions:
-      dump_database: "dump_pg_database"
+      dump_database: "dump_container_pg_db"
     context:
-      serviceName: "gitea-db"
-      tmpPathPrefix: "/tmp/db_dump.sql"
-  # - name: "backup db to restic repo"
-  #   actions:
-  #     dump_database: "backup_data_to_restic_repo"
-  #   context:
-  #     sourcePath: "/tmp/db_dump.sql"
-  #     serviceTag: "gitea-db"
-  # - name: "backup rusty-packages"
-  #   actions:
-  #     create_repo_dir_if_not_exists: "create_dir_if_not_exists"
-  #     create_repo_if_not_exists: "create_repo_if_not_exists"
-  #     check_restic_environment: "check_restic_environment"
-  #     backup_data_to_restic_repo: "backup_data_to_restic_repo"
-  #   context:
-  #     sourcePath: "/home/esilva/Trash/rusty_packages"
-  #     serviceTag: "rusty-packages"
+      dump_path: "/tmp/db_dump.sql"
+      db_user: "gitea"
+      database: "gitea"
+
+  - name: "restic database backup"
+    actions:
+      dump_database: "backup_data_to_restic_repo"
+    context:
+      source_path: "/tmp/db_dump.sql"
+      tags: ["gitea", "db-dump"]
+  
+  - name: "backup gitea mount points data"
+    actions:
+      backup_data_to_restic_repo: "backup_data_to_restic_repo"
+    context:
+      source_path: "/home/esilva/Trash/docker-compose/resources/gitea/gitea_data/"
+      tags: ["gitea", "data"]
+
+  - name: "backup gitea database mount points data"
+    actions:
+      backup_data_to_restic_repo: "backup_data_to_restic_repo"
+    context:
+      source_path: "/home/esilva/Trash/docker-compose/resources/gitea/postgres_data/"
+      tags: ["gitea", "db-data"]
