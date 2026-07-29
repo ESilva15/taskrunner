@@ -10,38 +10,44 @@ global_context:
   repoPath: "/home/esilva/Trash/test_borgmatic/destiny2"
   passwordFile: "/home/esilva/Trash/test_borgmatic/pass_file"
 
-steps:
-  - name: "find database container"
-    actions:
-      find_container: "get_service_container_name"
-    context:
-      service_name: "gitea-db"
+acts:
+  - name: "DB Dump and Backup"
+    steps:
+      - name: "find database container"
+        actions:
+          find_container: "get_service_container_name"
+        context:
+          service_name: "gitea-db"
+    
+      - name: "dump database"
+        actions:
+          dump_database: "dump_container_pg_db"
+        context:
+          dump_path: "/tmp/db_dump.sql"
+          db_user: "gitea"
+          database: "gitea"
+    
+      - name: "restic database backup"
+        actions:
+          dump_database: "backup_data_to_restic_repo"
+        context:
+          source_path: "/tmp/db_dump.sql"
+          tags: ["gitea", "db-dump"]
 
-  - name: "dump database"
-    actions:
-      dump_database: "dump_container_pg_db"
-    context:
-      dump_path: "/tmp/db_dump.sql"
-      db_user: "gitea"
-      database: "gitea"
+  - name: "Backup gitea data"
+    steps:
+      - name: "backup gitea mount points data"
+        actions:
+          backup_data_to_restic_repo: "backup_data_to_restic_repo"
+        context:
+          source_path: "/home/esilva/Trash/docker-compose/resources/gitea/gitea_data/"
+          tags: ["gitea", "data"]
 
-  - name: "restic database backup"
-    actions:
-      dump_database: "backup_data_to_restic_repo"
-    context:
-      source_path: "/tmp/db_dump.sql"
-      tags: ["gitea", "db-dump"]
-  
-  - name: "backup gitea mount points data"
-    actions:
-      backup_data_to_restic_repo: "backup_data_to_restic_repo"
-    context:
-      source_path: "/home/esilva/Trash/docker-compose/resources/gitea/gitea_data/"
-      tags: ["gitea", "data"]
-
-  - name: "backup gitea database mount points data"
-    actions:
-      backup_data_to_restic_repo: "backup_data_to_restic_repo"
-    context:
-      source_path: "/home/esilva/Trash/docker-compose/resources/gitea/postgres_data/"
-      tags: ["gitea", "db-data"]
+  - name: "Backup gitea PG data"
+    steps:
+      - name: "backup gitea database mount points data"
+        actions:
+          backup_data_to_restic_repo: "backup_data_to_restic_repo"
+        context:
+          source_path: "/home/esilva/Trash/docker-compose/resources/gitea/postgres_data/"
+          tags: ["gitea", "db-data"]

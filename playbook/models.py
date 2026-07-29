@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import functools
 from enum import StrEnum
 from typing import List, Dict, Any, Callable
 from datetime import datetime, timezone
@@ -51,6 +52,7 @@ class ContextChecker:
     @classmethod
     def requires(cls, *args):
         def decorator(func: ActionFn):
+            @functools.wraps(func)
             def wrapper(ctx: Dict[str, Any], name: str) -> StepLog:
                 if all(key in ctx for key in args):
                     return func(ctx, name)

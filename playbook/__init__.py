@@ -5,7 +5,7 @@ import sys
 import yaml
 import json
 import importlib.util
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import MISSING, asdict, dataclass
 from abc import ABC, abstractmethod
@@ -95,6 +95,7 @@ class Play(object):
         self.name: str = name
         self.log_dir: str = ""
         self._context: Dict[str, Any] = {}
+        self._acts: Dict[str, List[CustomStep]] = {}
         self._steps: List[StepEntry] = []
         self._registries: Dict[str, ActionRegistry] = {registry.name: registry} | registries
 
@@ -126,12 +127,23 @@ class Play(object):
         self._steps.append(StepEntry(name=name, step=stepRunner))
 
     def view_playbook(self) -> str:
-        steps_info = []
-        for s in self._steps:
-            steps_info.append({
-                "name": s.name,
-                "actions": s.step.get_action_names()
-            })
+        acts_info = {}
+        for act_name, step_list in self._acts.items():
+            steps_info = []
+            for s in step_list:
+                steps_info.append({
+                    "name": s.name,
+                    "actions": s.get_action_names()
+                })
+
+            new_act = {
+                "name": act_name,
+                "steps": steps_info
+            }
+            
+            acts_info[act_name] = new_act
+
+
 
         registry_data = []
         for reg in self._registries.values():
@@ -140,14 +152,14 @@ class Play(object):
         data = {
             "name": self.name,
             "registries": registry_data,
-            "number_of_steps": len(steps_info),
-            "steps": steps_info,
+            "number_of_acts": len(acts_info),
+            "acts": acts_info,
         }
 
         return json.dumps(data)
 
     def play(self) -> StepLog:
-        log: StepLog = timed_run(self._play)
+        log: StepLog = timed_run(self._play_act)
 
         if self.log_dir != "":
             log.log_file_path = os.path.join(
@@ -174,7 +186,33 @@ class Play(object):
             raise PlaybookError(f"failed to create log file {e}") from e
         return ""
 
-    def _play(self) -> StepLog:
+    def _play_act(self) -> StepLog:
+        playLog: StepLog = StepLog(
+                step_name=self.name,
+                status=Status.GOOD,
+                duration_sec=0,
+                msg="",
+                error=[],
+                substeps=[],
+                )
+
+        for a in self._acts:
+            log: StepLog = self._play_steps(self._acts[a])
+
+            if log.failed:
+                playLog.error.append({
+                    "status": "failed",
+                    "output": f"failed in step: {log.step_name}"
+                })
+                playLog.status = Status.BAD
+                break
+
+        if playLog.status == Status.GOOD:
+            playLog.msg = "success"
+
+        return playLog
+
+    def _play_steps(self, steps: List[CustomStep]) -> StepLog:
         playLog: StepLog = StepLog(
                 step_name=self.name,
                 status=Status.GOOD,
@@ -185,14 +223,17 @@ class Play(object):
                 )
 
         prev_ctx: Dict[str, Any] = {}
-        for s in self._steps:
-            log: StepLog = timed_run(s.step.run, self._context | prev_ctx)
+        for step in steps:
+            log: StepLog = timed_run(step.run, self._context | prev_ctx)
             prev_ctx = log.pipe_ctx
 
             playLog.substeps.append(log)
 
             if log.failed:
-                playLog.error.append({"status": "failed", "output": f"failed in step: {s.name}"})
+                playLog.error.append({
+                    "status": "failed",
+                    "output": f"failed in step: {step.name}"
+                })
                 playLog.status = Status.BAD
                 break
 
@@ -254,21 +295,34 @@ class Play(object):
 
         return custom_registries
 
+    # NOTE: yes, I know, I have to refactor this
+    def __from_yaml_str_load_acts(self, data):
+        for idx, act in enumerate(data.get("acts", [])):
+            act_name = act.get("name", f"step_{idx}")
+            steps = act.get("steps", [])
+            
+            self._acts[act_name] = []
+            try:
+                self.__from_yaml_str_load_steps(act_name, steps)
+            except Exception as e:
+                raise PlaybookError(f"error loading steps for act {act_name}") from e
+            
+
     # NOTE: Move to factory
-    def __from_yaml_str_load_steps(self, data):
-        for idx, step_cfg in enumerate(data.get("steps", [])):
-            step_name = step_cfg.get("name", f"step_{idx}")
+    def __from_yaml_str_load_steps(self, key, data):
+        for step_cfg in data:
+            step_name = step_cfg.get("name", f"")
             actions = step_cfg.get("actions", {})
             context = step_cfg.get("context", {})
 
             if not isinstance(actions, dict) or len(actions) <= 0:
                 raise PlaybookError(
-                    f"Step '{step_name}' (index {idx}) must define at least one action "
+                    f"Step '{step_name}' (index ) must define at least one action "
                 )
             
             try:
                 customStep: CustomStep = self._build_custom_step(step_name, actions, context)
-                self.add_step(step_cfg["name"], customStep)
+                self._acts[key].append(customStep)
             except Exception as e:
                 raise PlaybookError(f"Error configuring step '{step_name}': {e}") from e
 
@@ -291,7 +345,7 @@ class Play(object):
 
         playbook = cls(data["playbook_name"], registries=custom_registries)
         try:
-            playbook.__from_yaml_str_load_steps(data)
+            playbook.__from_yaml_str_load_acts(data)
         except Exception as e:
             raise PlaybookError(f"steps load error: {e}") from e
 
