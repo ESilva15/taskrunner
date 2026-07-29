@@ -51,7 +51,11 @@ class CustomStep(StepIF):
         prev_step_ctx: Dict[str, Any] = {}
 
         for op in self.__actions:
-            log: StepLog = timed_run(op, ctx | prev_step_ctx | self.__context, op.__name__)
+            try:
+                log: StepLog = timed_run(op, ctx | prev_step_ctx | self.__context, self.name)
+            except Exception as e:
+                log: StepLog = StepLog.fail(self.name, [{"status": "failed", "output": str(e)}])
+
             status = Status.BAD if log.failed else Status.GOOD
             prev_step_ctx = log.pipe_ctx
 
