@@ -1,11 +1,11 @@
 # restic actions registry
 from playbook.action_registry import ActionRegistry
-from playbook.models import ContextChecker
-from playbook.logging_models import StepLogModel
+from playbook.models import ContextChecker, StepLog
 
 import sys
 import json
 import subprocess
+from typing import List, Dict, Any, Tuple
 
 
 # NOTE:
@@ -14,10 +14,10 @@ import subprocess
 # we can create a class for this I reckon
 
 
-restic = ActionRegistry(name="restic_actions_reg")
+restic = ActionRegistry("restic_actions_reg")
 
 
-def parse_output(line: str) -> list[dict[str, object]]:
+def parse_output(line: str) -> List[Dict[str, Any]]:
     errors = []
     for line in line.split('\n'):
         if line.startswith("{"):  # } treesitter is borked lmao
@@ -26,7 +26,7 @@ def parse_output(line: str) -> list[dict[str, object]]:
     return errors
 
 
-def find_restic_errors(data: list[dict[str, object]]) -> list[dict[str, object]]:
+def find_restic_errors(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     errors = []
     for s in data:
         if s["message_type"] == "exit_error":
@@ -34,7 +34,7 @@ def find_restic_errors(data: list[dict[str, object]]) -> list[dict[str, object]]
     return errors
 
 
-def run_restic_command(cmd: list[str]) -> tuple[int, list[dict[str, object]]]:
+def run_restic_command(cmd: List[str]) -> Tuple[int, List[Dict[str, Any]]]:
     """
     Executes a restic command, streams output live to terminal, 
     and returns (returncode, parsed_json_objects).
@@ -75,78 +75,78 @@ def run_restic_command(cmd: list[str]) -> tuple[int, list[dict[str, object]]]:
 
 
 @restic.register(name="check_restic_environment", version="")
-def check_restic_environment(ctx, name: str = "") -> StepLogModel:
+def check_restic_environment(ctx, name: str = "") -> StepLog:
     for v in ["passwordFile", "repoPath", "sourcePath", "serviceTag"]:
         if not ctx.get(v):
-            return StepLogModel.fail(name, [f"{v} variable is empty"])
+            return StepLog.fail(name, [f"{v} variable is empty"])
 
-    return StepLogModel.ok(name, "environment configuration seems to be valid")
+    return StepLog.ok(name, "environment configuration seems to be valid")
 
 
 @restic.register(name="create_restic_repo", version="")
-def create_restic_repo(ctx, name: str = "") -> StepLogModel:
+def create_restic_repo(ctx, name: str = "") -> StepLog:
     cmd = ["restic", "init", "--json", "-r", ctx["repoPath"], 
          "--password-file", ctx["passwordFile"]]
 
     returncode, json_output = run_restic_command(cmd)
 
-    errors: list[dict[str, object]] = find_restic_errors(json_output)
+    errors: List[Dict[str, Any]] = find_restic_errors(json_output)
 
     # Handle error messages in JSON output
     if len(errors) > 0:
-        return StepLogModel.fail(name, errors)
+        return StepLog.fail(name, errors)
 
     # Make sure the return code is good too
     if returncode != 0:
-        return StepLogModel.fail(name, [{"status": "failed", "output": json_output}])
+        return StepLog.fail(name, [{"status": "failed", "output": json_output}])
 
-    return StepLogModel.ok(name, "repo create succesfully")
+    return StepLog.ok(name, "repo create succesfully")
 
 
 @restic.register(name="create_repo_if_not_exists", version="")
-def create_repo_if_not_exists(ctx, name: str = "") -> StepLogModel:
-    log: StepLogModel = check_if_repo_exists(ctx, "")
+def create_repo_if_not_exists(ctx, name: str = "") -> StepLog:
+    log: StepLog = check_if_repo_exists(ctx, "")
 
     msg: str = ""
     if log.failed:
         # Repo doesn't exist is error code 10
         if log.error[0]["code"] != 10:
-            return StepLogModel.fail(name, [{"status": "failed", "output": log.error}])
+            return StepLog.fail(name, [{"status": "failed", "output": log.error}])
 
         # Create repo
-        repoCreateLog: StepLogModel = create_restic_repo(ctx, name + f".{create_restic_repo.__name__}")
+        repoCreateLog: StepLog = create_restic_repo(ctx, name + f".{create_restic_repo.__name__}")
         if repoCreateLog.failed:
-            return StepLogModel.fail(name, [{"status": "failed", "output": repoCreateLog.error}])
+            return StepLog.fail(name, [{"status": "failed", "output": repoCreateLog.error}])
         msg = "repo created"
     else:
         msg = "repo already exists"
 
 
-    return StepLogModel.ok(name, msg)
+    return StepLog.ok(name, msg)
 
 
 @restic.register(name="check_if_repo_exists", version="")
-def check_if_repo_exists(ctx, name: str = "") -> StepLogModel:
+def check_if_repo_exists(ctx, name: str = "") -> StepLog:
     cmd = ["restic", "-r", ctx["repoPath"], "cat", "config", "--json",
            "--password-file", ctx["passwordFile"]]
     returncode, json_output = run_restic_command(cmd)
 
-    errors: list[dict[str, object]] = find_restic_errors(json_output)
+    errors: List[Dict[str, Any]] = find_restic_errors(json_output)
 
     # Handle error messages in JSON output
     if len(errors) > 0:
-        return StepLogModel.fail(name, errors)
+        return StepLog.fail(name, errors)
 
     # Make sure the return code is good too
     if returncode != 0:
-        return StepLogModel.fail(name, [{"status": "failed", "output": json_output}])
+        return StepLog.fail(name, [{"status": "failed", "output": json_output}])
 
-    return StepLogModel.ok(name, "repo seems to exist")
+    return StepLog.ok(name, "repo seems to exist")
 
 
 @restic.register(name="backup_data_to_restic_repo", version="")
 @ContextChecker.requires("source_path", "passwordFile")
-def backup_data_to_restic_repo(ctx, name) -> StepLogModel:
+def backup_data_to_restic_repo(ctx, name) -> StepLog:
     cmd = ["restic", "backup", ctx["source_path"], "--json", "--quiet",
          "-r", ctx["repoPath"], "--password-file", ctx["passwordFile"]]
     if ctx["tags"]:
@@ -154,14 +154,14 @@ def backup_data_to_restic_repo(ctx, name) -> StepLogModel:
 
     returncode, json_output = run_restic_command(cmd)
     print(json_output, file=sys.stderr)
-    errors: list[dict[str, object]] = find_restic_errors(json_output)
+    errors: List[Dict[str, Any]] = find_restic_errors(json_output)
 
     # Handle error messages in JSON output
     if len(errors) > 0:
-        return StepLogModel.fail(name, errors)
+        return StepLog.fail(name, errors)
 
     # Make sure the return code is good too
     if returncode != 0:
-        return StepLogModel.fail(name, [{"status": "failed", "output": errors}])
+        return StepLog.fail(name, [{"status": "failed", "output": errors}])
 
-    return StepLogModel.ok(name, "backup successful")
+    return StepLog.ok(name, "backup successful")
