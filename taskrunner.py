@@ -10,6 +10,8 @@ def parse_args() -> argparse.Namespace:
     # Flag for the playbook file
     _ = parser.add_argument(
         "-p", "--playbook",
+        nargs='+',
+        default=[],
         type=str,
         required=True,
         help="Path to the playbook yaml file"
@@ -21,18 +23,18 @@ def parse_args() -> argparse.Namespace:
 def main():
     args: argparse.Namespace = parse_args()
 
-    newPlay: Playbook
-    try:
-        newPlay = Playbook.from_yaml(args.playbook)
-    except Exception as e:
-        print(f"Failed to load playbook: {e}")
-        traceback.print_exc()
-        exit(1)
+    for arg in args.playbook:
+        newPlay: Playbook
+        try:
+            newPlay = Playbook.from_yaml(arg)
+        except Exception as e:
+            print(f"Failed to load playbook: {e}")
+            traceback.print_exc()
+            exit(1)
 
-    # print(newPlay.view_playbook())
-    log = newPlay.run_play()
-    print(log.model_dump_json())
-    # print(json.dumps(asdict(newPlay.run_play()), indent=2))
+        print(newPlay.view_playbook())
+        log = newPlay.run_play()
+        print(log.model_dump_json())
 
 
 if __name__ == "__main__":
