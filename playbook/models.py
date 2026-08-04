@@ -23,26 +23,26 @@ class StepModel(BaseModel):
     def serialize_action_fn(self, action_fn: ActionFn, _info) -> str:
         return getattr(action_fn, "__name__", str(action_fn))
 
-    def run(self, ctx) -> StepLogModel:
+    def run(self, ctx: dict[str, object]) -> StepLogModel:
         """ Run the step. """
         substeps: list[StepLogModel] = []
         previous_step_ctx: dict[str, object] = {}
-        for action in self.actions:
-            try:
-                local_ctx: CtxType = ctx | previous_step_ctx | self.context
-                log: StepLogModel = timed_run(
-                    action, local_ctx, self.name
-                )
-            except Exception as e:
-                log: StepLogModel = StepLogModel.fail(
-                    self.name, str(e)
-                )
 
-            previous_step_ctx = log.pipe_ctx
+        try:
+            local_ctx: CtxType = ctx | previous_step_ctx | self.context
+            log: StepLogModel = timed_run(
+                self.action, local_ctx, self.name
+            )
+        except Exception as e:
+            log: StepLogModel = StepLogModel.fail(
+                self.name, str(e)
+            )
 
-            substeps.append(log)
-            if log.status == Status.BAD:
-                return StepLogModel.fail(self.name, err=f"failed on step: {log.name}")
+        previous_step_ctx = log.pipe_ctx
+
+        substeps.append(log)
+        if log.status == Status.BAD:
+            return StepLogModel.fail(self.name, err=f"failed on step: {log.name}")
 
         return StepLogModel.ok(self.name, msg="success", substeps=substeps)
 
@@ -55,7 +55,7 @@ class ActModel(BaseModel):
     def run(self, ctx) -> ActLog:
         step_logs: list[StepLogModel] = []
         for step in self.steps:
-            stepLog: StepLogModel = step.run(ctx)
+            stepLog: StepLogModel = timed_run(step.run, ctx)
             step_logs.append(stepLog)
             if stepLog.failed:
                 break
@@ -101,7 +101,7 @@ class PlaybookModel(BaseModel):
     def _run(self) -> PlaybookLog:
         act_logs: list[ActLog] = []
         for act in self.acts:
-            log: ActLog = act.run(self.global_context)
+            log: ActLog = timed_run(act.run, self.global_context)
             act_logs.append(log)
 
         return PlaybookLog.ok(name="somasjd", msg="ajshdsajhd", logs=act_logs)

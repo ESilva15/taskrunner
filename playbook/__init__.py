@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from pydantic import BaseModel
 
 from playbook.models import ActModel, PlaybookModel, StepModel, timed_run
-from playbook.logging_models import Status, StepLogModel
+from playbook.logging_models import PlaybookLog, Status, StepLogModel
 from playbook.action_registry import ActionFn, ActionRegistry
 
 
@@ -21,61 +21,6 @@ class StepIF(ABC):
         """ Return a mapping of action roles (pre, play, post) to function names. """
         pass
 
-# class Play(object):
-#     def __init__(self, name: str, registries: dict[str, ActionRegistry]):
-#         self.name: str = name
-#         self.log_dir: str = ""
-#         self._context: dict[str, object] = {}
-#         self._acts: dict[str, list[CustomStep]] = {}
-#         self._steps: list[StepEntry] = []
-#         self._registries: dict[str, ActionRegistry] = {
-#             registry.name: registry} | registries
-#
-#
-#     def add_step(self, name: str, stepRunner: StepIF):
-#         self._steps.append(StepEntry(name=name, step=stepRunner))
-#
-#     def view_playbook(self) -> str:
-#         acts_info = {}
-#         for act_name, step_list in self._acts.items():
-#             steps_info = []
-#             for s in step_list:
-#                 steps_info.append({
-#                     "name": s.name,
-#                     "actions": s.get_action_names()
-#                 })
-#
-#             new_act = {
-#                 "name": act_name,
-#                 "steps": steps_info
-#             }
-#
-#             acts_info[act_name] = new_act
-#
-#         registry_data = []
-#         for reg in self._registries.values():
-#             registry_data.append(reg.manifest())
-#
-#         data = {
-#             "name": self.name,
-#             "registries": registry_data,
-#             "number_of_acts": len(acts_info),
-#             "acts": acts_info,
-#         }
-#
-#         return json.dumps(data)
-#
-#     def play(self) -> StepLogModel:
-#         log: StepLogModel = timed_run(self._play_act)
-#
-#         if self.log_dir != "":
-#             log.log_file_path = os.path.join(
-#                 self.log_dir, self.log_file_name(log.start_date_timestamp)
-#             )
-#             self._write_log(log)
-#
-#         return log
-#
 #     def log_file_name(self, start_date_ns: int) -> str:
 #         """ Format to ISO 8601. """
 #         seconds = start_date_ns // 1_000_000_000
@@ -212,7 +157,6 @@ class PlaybookYAMLParser():
         )
 
         return Playbook(new_playbook)
-    pass
 
 
 class Playbook():
@@ -232,5 +176,13 @@ class Playbook():
     def view_playbook(self) -> str:
         return self.model.model_dump_json()
 
-    def run_play(self):
-        return self.model.run()
+    def run_play(self) -> PlaybookLog:
+        log: PlaybookLog = self.model.run()
+
+        # if self.model.log_dir != "":
+        #     log.log_file_path = os.path.join(
+        #         self.model.log_dir, self.log_file_name(log.start_date_timestamp)
+        #     )
+        #     self._write_log(log)
+
+        return log
