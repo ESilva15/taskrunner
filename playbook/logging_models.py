@@ -43,7 +43,7 @@ class ActLog(BaseLog):
 
 
 class PlaybookLog(BaseLog):
-    errors: list[str] = []
+    errors: str = ""
     summary: str = ""
     act_logs: list[ActLog]
 
@@ -56,7 +56,7 @@ class PlaybookLog(BaseLog):
         return cls(name=name, status=Status.GOOD, summary=msg, act_logs=logs)
 
     @classmethod
-    def fail(cls, name: str, logs: list[ActLog], err: list[str]) -> PlaybookLog:
+    def fail(cls, name: str, logs: list[ActLog], err: str) -> PlaybookLog:
         return cls(name=name, status=Status.BAD, errors=err, act_logs=logs)
 
 

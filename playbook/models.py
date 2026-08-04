@@ -3,9 +3,8 @@ from __future__ import annotations
 import yaml
 import time
 import functools
-from typing import Callable
 from datetime import datetime, timezone
-from pydantic import BaseModel, ValidationInfo, field_serializer, field_validator, model_validator
+from pydantic import BaseModel, ValidationInfo, field_serializer, model_validator
 
 from playbook.action_registry import ActionRegistry, ActionFn
 from playbook.logging_models import PlaybookLog, StepLogModel, ActLog, Status
@@ -26,10 +25,9 @@ class StepModel(BaseModel):
     def run(self, ctx: dict[str, object]) -> StepLogModel:
         """ Run the step. """
         substeps: list[StepLogModel] = []
-        previous_step_ctx: dict[str, object] = {}
 
         try:
-            local_ctx: CtxType = ctx | previous_step_ctx | self.context
+            local_ctx: CtxType = ctx | self.context
             log: StepLogModel = timed_run(
                 self.action, local_ctx, self.name
             )
@@ -38,13 +36,14 @@ class StepModel(BaseModel):
                 self.name, str(e)
             )
 
-        previous_step_ctx = log.pipe_ctx
-
         substeps.append(log)
         if log.status == Status.BAD:
-            return StepLogModel.fail(self.name, err=f"failed on step: {log.name}")
+            return StepLogModel.fail(
+                self.name,
+                err=f"failed on step: {log.name} with error {log.error}"
+            )
 
-        return StepLogModel.ok(self.name, msg="success", substeps=substeps)
+        return log
 
 
 class ActModel(BaseModel):
@@ -53,12 +52,20 @@ class ActModel(BaseModel):
 
     # NOTE: this shouldnt return a steplogmodel but an actlogmodel or something like that
     def run(self, ctx) -> ActLog:
+        """
+        Runs the steps in this act.
+        If a step fails we return with a failed status from this act.
+        """
         step_logs: list[StepLogModel] = []
+        previous_step_ctx: dict[str, object] = {}
         for step in self.steps:
-            stepLog: StepLogModel = timed_run(step.run, ctx)
+            stepLog: StepLogModel = timed_run(step.run, ctx | previous_step_ctx)
             step_logs.append(stepLog)
+
             if stepLog.failed:
-                break
+                return ActLog.fail(self.name, err=stepLog.error, logs=step_logs)
+
+            previous_step_ctx = stepLog.pipe_ctx
 
         return ActLog.ok(self.name, msg="success", logs=step_logs)
 
@@ -99,12 +106,27 @@ class PlaybookModel(BaseModel):
         # return cls(**data)
 
     def _run(self) -> PlaybookLog:
+        """
+        Internal _run method. This one times the run.
+        Runs every act registered wheter one fails or not.
+        Status is set to BAD on at least one failure.
+        """
         act_logs: list[ActLog] = []
+        failed_on: list[str] = []
         for act in self.acts:
             log: ActLog = timed_run(act.run, self.global_context)
             act_logs.append(log)
 
-        return PlaybookLog.ok(name="somasjd", msg="ajshdsajhd", logs=act_logs)
+            if log.status == Status.BAD:
+                failed_on.append(log.name)
+        
+        if len(failed_on) > 0:
+            return PlaybookLog.fail(
+                self.playbook_name,
+                err='failed on the act(s): ' + ','.join(failed_on),
+                logs=act_logs
+            )
+        return PlaybookLog.ok(name=self.playbook_name, msg="success", logs=act_logs)
 
     def run(self) -> PlaybookLog:
         return timed_run(self._run)
