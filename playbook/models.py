@@ -5,62 +5,46 @@ import time
 import functools
 from typing import Callable
 from datetime import datetime, timezone
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ValidationInfo, field_serializer, field_validator, model_validator
 
 from playbook.action_registry import ActionRegistry, ActionFn
-from playbook.logging_models import StepLogModel
+from playbook.logging_models import PlaybookLog, StepLogModel, ActLog, Status
+
+
+CtxType = dict[str, object]
 
 
 class StepModel(BaseModel):
     name: str
-    _actions: list[ActionFn]
-    _context: dict[str, object]
+    action: ActionFn
+    context: dict[str, object]
 
-    def get_action_names(self) -> list[str]:
-        return [action.__name__ for action in self._actions]
+    @field_serializer("action")
+    def serialize_action_fn(self, action_fn: ActionFn, _info) -> str:
+        return getattr(action_fn, "__name__", str(action_fn))
 
-    # NOTE: refactor this method to be more readable
     def run(self, ctx) -> StepLogModel:
         """ Run the step. """
-        return StepLogModel.ok(self.name, msg="success")
-        # substeps: list[StepLogModel] = []
-        # status: Status = Status.GOOD
-        #
-        # # NOTE:
-        # # Use this to move context from the previous step to the next step
-        # # This is wrong, we are moving away from having a list of steps here to a single
-        # # step for each operation
-        # prev_step_ctx: dict[str, object] = {}
-        #
-        # for op in self.__actions:
-        #     try:
-        #         log: StepLogModel = timed_run(
-        #             op, ctx | prev_step_ctx | self.__context, self.name)
-        #     except Exception as e:
-        #         log: StepLogModel = StepLogModel.fail(
-        #             self.name, [{"status": "failed", "output": str(e)}])
-        #
-        #     status = Status.BAD if log.failed else Status.GOOD
-        #     prev_step_ctx = log.pipe_ctx
-        #
-        #     substeps.append(log)
-        #
-        #     if status == Status.BAD:
-        #         break
-        #
-        # errors = []
-        # msg: str = ""
-        # if status == Status.BAD:
-        #     # Note, use this to set the standar error output/formatting
-        #     # errors = [{"status": "failed", "output": ""}]
-        #     errors = []
-        # else:
-        #     msg = "success"
-        #
-        # return StepLogModel(
-        #     step_name=self.name, status=status,
-        #     msg=msg, error=errors, substeps=substeps, pipe_ctx=prev_step_ctx
-        # )
+        substeps: list[StepLogModel] = []
+        previous_step_ctx: dict[str, object] = {}
+        for action in self.actions:
+            try:
+                local_ctx: CtxType = ctx | previous_step_ctx | self.context
+                log: StepLogModel = timed_run(
+                    action, local_ctx, self.name
+                )
+            except Exception as e:
+                log: StepLogModel = StepLogModel.fail(
+                    self.name, str(e)
+                )
+
+            previous_step_ctx = log.pipe_ctx
+
+            substeps.append(log)
+            if log.status == Status.BAD:
+                return StepLogModel.fail(self.name, err=f"failed on step: {log.name}")
+
+        return StepLogModel.ok(self.name, msg="success", substeps=substeps)
 
 
 class ActModel(BaseModel):
@@ -68,8 +52,15 @@ class ActModel(BaseModel):
     steps: list[StepModel]
 
     # NOTE: this shouldnt return a steplogmodel but an actlogmodel or something like that
-    def run(self, ctx) -> StepLogModel:
-        return StepLogModel.ok(self.name, msg="success")
+    def run(self, ctx) -> ActLog:
+        step_logs: list[StepLogModel] = []
+        for step in self.steps:
+            stepLog: StepLogModel = step.run(ctx)
+            step_logs.append(stepLog)
+            if stepLog.failed:
+                break
+
+        return ActLog.ok(self.name, msg="success", logs=step_logs)
 
 
 class PlaybookModel(BaseModel):
@@ -79,36 +70,43 @@ class PlaybookModel(BaseModel):
     global_context: dict[str, str]
     acts: list[ActModel]
 
-    @field_validator("registries", mode="before")
+    @model_validator(mode="before")
     @classmethod
-    def parse_registries(cls, v: object) -> list[ActionRegistry]:
-        result = []
-        if isinstance(v, list):
-            for item in v:
-                if isinstance(item, str):
-                    try:
-                        registries: list[ActionRegistry] = \
-                            ActionRegistry.load_registries_from_file(item)
-                        result.extend(registries)
-                    except Exception as e:
-                        raise e
-                else:
-                    raise ValueError(f"Invalid registry type: {type(item)}")
-        return result
+    # def parse_registries(cls, v: object) -> list[ActionRegistry]:
+    def load_registries(cls, data: object, info: ValidationInfo) -> object:
+        if not isinstance(data, dict):
+            return data
+
+        raw_registries = data.get("registries", [])
+        loaded_registries: list[ActionRegistry] = []
+
+        for item in raw_registries:
+            if isinstance(item, str):
+                loaded_registries.extend(ActionRegistry.load_registries_from_file(item))
+
+        data["registries"] = loaded_registries
+
+        if info.context is not None:
+            info.context["registries"] = loaded_registries
+
+        return data
 
     @classmethod
     def from_yaml_file(cls, fp: str):
         with open(fp, "rb") as f:
             data = yaml.safe_load(f)
-        return cls(**data)
+        return cls.model_validate(data, context={})
+        # return cls(**data)
 
-    def _run(self) -> StepLogModel:
+    def _run(self) -> PlaybookLog:
+        act_logs: list[ActLog] = []
         for act in self.acts:
-            act.run(self.global_context)
+            log: ActLog = act.run(self.global_context)
+            act_logs.append(log)
 
-        return StepLogModel.ok(name="somasjd", msg="ajshdsajhd")
+        return PlaybookLog.ok(name="somasjd", msg="ajshdsajhd", logs=act_logs)
 
-    def run(self) -> StepLogModel:
+    def run(self) -> PlaybookLog:
         return timed_run(self._run)
 
 
@@ -128,7 +126,7 @@ class ContextChecker:
                 else:
                     missing_keys = [key for key in args if key not in ctx]
                     missing_keys_msg = f"missing context keys: {missing_keys}"
-                    return StepLog.fail(name, [{"status": "failed", "output": missing_keys_msg}])
+                    return StepLogModel.fail(name, err=missing_keys_msg)
             return wrapper
         return decorator
 
@@ -142,17 +140,18 @@ def human_readable_date(time: int) -> str:
     return dt.strftime(f"%Y-%m-%dT%H:%M:%S.{nanos:09d}%:z")
 
 
-def timed_run(op: Callable[..., StepLogModel], *args: object, **kwargs: object) -> StepLogModel:
+# def timed_run(op: Callable[..., StepLogModel], *args: object, **kwargs: object) -> StepLogModel:
+def timed_run(op, *args: object, **kwargs: object):
     start_date: int = time.time_ns()
     start_time: int = time.perf_counter_ns()
 
     try:
-        log: StepLogModel = op(*args, **kwargs)
+        log = op(*args, **kwargs)
     finally:
         delta = time.perf_counter_ns() - start_time
 
     # NOTE: we could simplyfy this by having a marshalling method
-    if isinstance(log, StepLogModel):
+    if isinstance(log, StepLogModel | PlaybookLog | ActLog):
         end_date: int = time.time_ns()
         log.timing.duration_sec = delta / 1_000_000_000.0
         log.timing.start_date = human_readable_date(start_date)

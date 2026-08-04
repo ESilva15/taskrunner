@@ -4,6 +4,7 @@ import importlib.util
 from playbook.logging_models import StepLogModel
 from typing import Callable
 from pydantic import BaseModel, PrivateAttr
+from dataclasses import field
 
 
 ActionFn = Callable[[dict[str, object], str], StepLogModel]
@@ -17,21 +18,21 @@ class Action(BaseModel):
 
 class ActionRegistry(BaseModel):
     name: str
-    _actions: dict[str, Action] = PrivateAttr(default_factory=dict)
+    actions: dict[str, Action] = field(default_factory=dict)
 
     def register(self, name: str, version: str):
         """Decorator to register python functions with a name and version."""
         def decorator(function: ActionFn):
-            self._actions[name] = Action(name=name, fn=function, ver=version)
+            self.actions[name] = Action(name=name, fn=function, ver=version)
             return function
         return decorator
 
     def get(self, name: str, ver: str = '*') -> ActionFn:
-        if name not in self._actions:
+        if name not in self.actions:
             raise ValueError(
                 f"Action '{name}' is not registered in registry '{self.name}'")
 
-        return self._actions[name].fn
+        return self.actions[name].fn
 
     @staticmethod
     def load_registries_from_file(file_path: str) -> list[ActionRegistry]:
