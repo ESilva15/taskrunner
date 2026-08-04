@@ -1,6 +1,7 @@
 from enum import StrEnum
 from dataclasses import field
 from pydantic import BaseModel
+from datetime import datetime, timezone
 
 
 class Status(StrEnum):
@@ -53,7 +54,7 @@ class PlaybookLog(BaseLog):
     @classmethod
     def ok(cls, name: str, logs: list[ActLog], msg: str = "success") -> PlaybookLog:
         return cls(name=name, status=Status.GOOD, summary=msg, act_logs=logs)
-    
+
     @classmethod
     def fail(cls, name: str, logs: list[ActLog], err: list[str]) -> PlaybookLog:
         return cls(name=name, status=Status.BAD, errors=err, act_logs=logs)
@@ -76,6 +77,16 @@ class StepLogModel(BaseLog):
         return cls(name=name, status=Status.GOOD, msg=msg, pipe_ctx=pipe_ctx,
                    substeps_logs=substeps)
 
-    @ classmethod
+    @classmethod
     def fail(cls, name: str, err: str) -> StepLogModel:
         return cls(name=name, status=Status.BAD, error=err)
+
+
+def log_file_name(name: str, start_date_ns: int) -> str:
+    """ Format to ISO 8601. """
+    seconds = start_date_ns // 1_000_000_000
+    ms = (start_date_ns % 1_000_000_000) // 1_000_000
+
+    dt = datetime.fromtimestamp(seconds, tz=timezone.utc).astimezone()
+
+    return dt.strftime(f"{name}_%Y-%m-%d_%H-%M-%S.{ms:03d}.log")

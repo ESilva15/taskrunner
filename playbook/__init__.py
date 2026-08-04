@@ -1,12 +1,13 @@
 from __future__ import annotations
 from re import A
+from tkinter.constants import E
 
 import yaml
 from abc import ABC, abstractmethod
 from pydantic import BaseModel
 
 from playbook.models import ActModel, PlaybookModel, StepModel, timed_run
-from playbook.logging_models import PlaybookLog, Status, StepLogModel
+from playbook.logging_models import PlaybookLog, Status, StepLogModel, log_file_name
 from playbook.action_registry import ActionFn, ActionRegistry
 
 
@@ -20,49 +21,6 @@ class StepIF(ABC):
     def get_action_names(self) -> list[str]:
         """ Return a mapping of action roles (pre, play, post) to function names. """
         pass
-
-#     def log_file_name(self, start_date_ns: int) -> str:
-#         """ Format to ISO 8601. """
-#         seconds = start_date_ns // 1_000_000_000
-#         ms = (start_date_ns % 1_000_000_000) // 1_000_000
-#
-#         dt = datetime.fromtimestamp(seconds, tz=timezone.utc).astimezone()
-#
-#         return dt.strftime(f"{self.name}_%Y-%m-%d_%H-%M-%S.{ms:03d}.log")
-#
-#     def _write_log(self, log: StepLogModel):
-#         try:
-#             with open(log.log_file_path, "w") as file:
-#                 json.dump(asdict(log), file)
-#         except Exception as e:
-#             raise PlaybookError(f"failed to create log file {e}") from e
-#         return ""
-#
-#     def _play_act(self) -> StepLogModel:
-#         playLog: StepLogModel = StepLogModel(
-#             step_name=self.name,
-#             status=Status.GOOD,
-#             duration_sec=0,
-#             msg="",
-#             error=[],
-#             substeps=[],
-#         )
-#
-#         for a in self._acts:
-#             log: StepLogModel = self._play_steps(self._acts[a])
-#
-#             if log.failed:
-#                 playLog.error.append({
-#                     "status": "failed",
-#                     "output": f"failed in step: {log.step_name}"
-#                 })
-#                 playLog.status = Status.BAD
-#                 break
-#
-#         if playLog.status == Status.GOOD:
-#             playLog.msg = "success"
-#
-#         return playLog
 
 
 class PlaybookYAMLParser():
@@ -173,16 +131,20 @@ class Playbook():
     def from_yaml(cls, fp: str) -> Playbook:
         return PlaybookYAMLParser.from_yaml(fp)
 
+    def _write_log(self, log: PlaybookLog):
+        try:
+            with open(log.log_file_path, "w") as file:
+                _ = file.write(log.model_dump_json())
+        except Exception as e:
+            raise Exception(f"failed to create log file {e}") from e
+        return ""
+
     def view_playbook(self) -> str:
         return self.model.model_dump_json()
 
     def run_play(self) -> PlaybookLog:
         log: PlaybookLog = self.model.run()
-
-        # if self.model.log_dir != "":
-        #     log.log_file_path = os.path.join(
-        #         self.model.log_dir, self.log_file_name(log.start_date_timestamp)
-        #     )
-        #     self._write_log(log)
-
+        log.log_file_path = self.model.log_dir + \
+                log_file_name(self.model.playbook_name, log.timing.start_date_timestamp)
+        self._write_log(log)
         return log
